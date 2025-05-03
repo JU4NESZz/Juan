@@ -23,27 +23,40 @@ class TxRequest(BaseModel):
 
 @app.post("/validate", summary="Valida y envia transacción")
 def validate_tx(req: TxRequest):
-    # Preparar cuenta y transacción
-    acct = Account.from_key(req.private_key)
-    nonce = w3.eth.get_transaction_count(acct.address)
-    tx = {
-        "nonce": nonce,
-        "to": req.to,
-        "value": w3.to_wei(req.value_ether, "ether"),
-        "gas": 21000,
-        "gasPrice": w3.eth.gas_price,
-        "chainId": CHAIN_ID
-    }
-    # Firmar y enviar
-    signed = acct.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
-    # Medir consumo de validación (gas usado)
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-    return {
-        "tx_hash": w3.to_hex(tx_hash),
-        "status": receipt.status,
-        "gas_used": receipt.gasUsed
-    }
+    try:
+        # Validar formato de la dirección de destino
+        if not w3.is_address(req.to):
+            raise HTTPException(status_code=400, detail="Dirección de destino inválida")
+
+        # Preparar cuenta y transacción
+        acct = Account.from_key(req.private_key)
+        nonce = w3.eth.get_transaction_count(acct.address)
+        tx = {
+            "nonce": nonce,
+            "to": req.to,
+            "value": w3.to_wei(req.value_ether, "ether"),
+            "gas": 21000,
+            "gasPrice": w3.eth.gas_price,
+            "chainId": CHAIN_ID
+        }
+        # Firmar y enviar
+        signed = acct.sign_transaction(tx)
+        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+        # Esperar confirmación y obtener recibo
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+
+        return {
+            "tx_hash": w3.to_hex(tx_hash),
+            "status": receipt.status,
+            "gas_used": receipt.gasUsed,
+            "block_number": receipt.blockNumber
+        }
+    except ValueError as ve:
+        # Captura errores como clave privada inválida o fondos insuficientes (a veces se manifiestan como ValueError)
+        raise HTTPException(status_code=400, detail=f"Error de valor: {str(ve)}")
+    except Exception as e:
+        # Captura otros errores generales (conexión, timeouts, etc.)
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 @app.get("/health", summary="Chequea estado de conexión")
 def health_check():
