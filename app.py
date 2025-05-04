@@ -44,7 +44,6 @@ def log_event_tx(req: TxRequest): # Función renombrada
             "nonce": nonce,
             "to": req.to,
             "value": w3.to_wei(req.value_ether, "ether"), # Usará 0 si no se especifica
-            # "gas": 21000, # Eliminado para permitir estimación automática
             "gasPrice": w3.eth.gas_price,
             "chainId": CHAIN_ID
         }
@@ -61,12 +60,43 @@ def log_event_tx(req: TxRequest): # Función renombrada
              # Si la estimación falla (ej. fondos insuficientes para gas), devolver error
              raise HTTPException(status_code=400, detail=f"Error estimando gas: {str(estimate_error)}")
 
+        # Firmar la transacción
+        try:
+            signed_tx = acct.sign_transaction(tx)
+        except Exception as sign_error:
+             # Log detallado del error durante la firma
+             print(f"Error during signing: {type(sign_error).__name__} - {sign_error}")
+             raise HTTPException(status_code=500, detail=f"Error al firmar la transacción: {str(sign_error)}")
 
-        # Firmar y enviar
-        signed = acct.sign_transaction(tx)
-        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+        # Verificar el objeto firmado antes de intentar acceder a raw_transaction (CORREGIDO)
+        if not hasattr(signed_tx, 'raw_transaction'): # CORREGIDO a snake_case
+            # Log para depuración si falta el atributo esperado
+            print(f"DEBUG: Signed object type: {type(signed_tx)}")
+            print(f"DEBUG: Signed object attributes: {dir(signed_tx)}")
+            try:
+                # Intentar imprimir el objeto si es posible
+                print(f"DEBUG: Signed object value: {signed_tx}")
+            except Exception:
+                print("DEBUG: No se pudo imprimir el valor del objeto signed_tx.")
+            # Lanzar un error claro indicando el problema
+            raise HTTPException(status_code=500, detail="Error interno: El objeto firmado no tiene el atributo 'raw_transaction'. Revise los logs del servidor.") # Mensaje actualizado
+
+        # Enviar la transacción firmada
+        try:
+            # CORREGIDO a snake_case
+            tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        except Exception as send_error:
+             # Log detallado del error durante el envío
+             print(f"Error during sending: {type(send_error).__name__} - {send_error}")
+             raise HTTPException(status_code=500, detail=f"Error al enviar la transacción: {str(send_error)}")
+
         # Esperar confirmación y obtener recibo
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        try:
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        except Exception as receipt_error:
+             # Log detallado del error esperando el recibo
+             print(f"Error waiting for receipt: {type(receipt_error).__name__} - {receipt_error}")
+             raise HTTPException(status_code=500, detail=f"Error esperando el recibo de la transacción: {str(receipt_error)}")
 
         return {
             "message": "Evento registrado exitosamente en blockchain.",
@@ -79,6 +109,10 @@ def log_event_tx(req: TxRequest): # Función renombrada
     except ValueError as ve:
         # Captura errores como clave privada inválida o problemas de formato (aunque algunos ya se capturan antes)
         raise HTTPException(status_code=400, detail=f"Error de valor: {str(ve)}")
+    except AttributeError as ae:
+         # Capturar específicamente el AttributeError que vimos y loguearlo
+         print(f"AttributeError capturado: {ae}")
+         raise HTTPException(status_code=500, detail=f"Error interno del servidor (AttributeError): {str(ae)}")
     except Exception as e:
         # Captura otros errores generales (conexión, timeouts, fondos insuficientes no capturados antes, etc.)
         print(f"Error detallado: {type(e).__name__} - {e}") # Loguear error para depuración
