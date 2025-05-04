@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field # Importar Field
 from typing import Optional # Importar Optional
 from web3 import Web3
 from eth_account import Account
+from web3.exceptions import TransactionNotFound # Importar excepción específica
 
 # RPC de Fuji Testnet
 RPC_URL = "https://api.avax-test.network/ext/bc/C/rpc"
@@ -117,6 +118,44 @@ def log_event_tx(req: TxRequest): # Función renombrada
         # Captura otros errores generales (conexión, timeouts, fondos insuficientes no capturados antes, etc.)
         print(f"Error detallado: {type(e).__name__} - {e}") # Loguear error para depuración
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+
+@app.get("/transaction_status/{tx_hash}", summary="Consulta el estado de una transacción por su hash")
+def get_transaction_status(tx_hash: str):
+    """
+    Busca una transacción por su hash y devuelve su estado y detalles del recibo.
+    """
+    try:
+        # Intenta obtener el recibo de la transacción
+        receipt = w3.eth.get_transaction_receipt(tx_hash)
+
+        # Si no se encuentra el recibo, la transacción no existe o no ha sido minada
+        if receipt is None:
+            raise HTTPException(status_code=404, detail="Transacción no encontrada o aún no minada.")
+
+        # Devuelve los detalles relevantes del recibo
+        return {
+            "tx_hash": w3.to_hex(receipt.transactionHash), # Confirmar el hash consultado
+            "status": receipt.status, # 1 para éxito, 0 para fallo
+            "block_number": receipt.blockNumber,
+            "block_hash": w3.to_hex(receipt.blockHash),
+            "from": receipt.get('from'), # Usar .get() por si no está presente en algún nodo/receipt
+            "to": receipt.get('to'),
+            "gas_used": receipt.gasUsed,
+            "cumulative_gas_used": receipt.cumulativeGasUsed,
+            # Puedes añadir más campos del recibo si los necesitas
+            # "logs": receipt.logs,
+            # "contractAddress": receipt.contractAddress,
+        }
+    except TransactionNotFound:
+        # Captura explícita si web3.py lanza esta excepción específica
+         raise HTTPException(status_code=404, detail="Transacción no encontrada.")
+    except ValueError as ve:
+         # Captura errores como un formato de hash inválido
+         raise HTTPException(status_code=400, detail=f"Hash de transacción inválido o error de formato: {str(ve)}")
+    except Exception as e:
+        # Captura otros errores generales (ej. problemas de conexión con el nodo RPC)
+        print(f"Error consultando estado de tx {tx_hash}: {type(e).__name__} - {e}")
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor al consultar la transacción: {str(e)}")
 
 @app.get("/health", summary="Chequea estado de conexión")
 def health_check():
